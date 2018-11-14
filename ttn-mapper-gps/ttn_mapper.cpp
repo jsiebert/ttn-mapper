@@ -28,31 +28,17 @@ const u1_t port = 2;
 extern OLED_Display display;
 
 // Send packet interval (in seconds) -- respect duty cycle!
-const uint16_t send_packet_interval = 60;
+const uint16_t send_packet_interval = 30;
 
 // Waiting on fix interval
 const uint8_t wait_fix_interval = 5;
 
-// LoRaWan keys
-static const u1_t app_eui[8]  = SECRET_APP_EUI;
-static const u1_t dev_eui[8]  = SECRET_DEV_EUI;
-static const u1_t app_key[16] = SECRET_APP_KEY;
-
 // Getters for LMIC
-void os_getArtEui (u1_t* buf)
-{
-  memcpy(buf, app_eui, 8);
-}
+void os_getArtEui (u1_t* buf) { }
 
-void os_getDevEui (u1_t* buf)
-{
-  memcpy(buf, dev_eui, 8);
-}
+void os_getDevEui (u1_t* buf) { }
 
-void os_getDevKey (u1_t* buf)
-{
-  memcpy(buf, app_key, 16);
-}
+void os_getDevKey (u1_t* buf) { }
 
 // Pin mapping
 // The Feather M0 LoRa does not map RFM95 DIO1 to an M0 port.
@@ -66,22 +52,51 @@ const lmic_pinmap lmic_pins = {
     .dio = {3, 11, LMIC_UNUSED_PIN},
 };
 
+static osjob_t send_packet_job;
+static void send_packet(osjob_t* j);
+
 // Init job -- Actual message loop will be initiated when join completes
 osjob_t init_lora_job;
 void init_lora (osjob_t* j)
 {
   // Reset the MAC state. Session and pending data transfers will be discarded.
   LMIC_reset();
-  // Allow 1% error margin on clock
-  // Note: this might not be necessary, never had clock problem...
-  LMIC_setClockError(MAX_CLOCK_ERROR * 1 / 100);
-  // start joining
-  LMIC_startJoining();
+  
+  #ifdef PROGMEM
+    uint8_t appskey[sizeof(APPSKEY)];
+    uint8_t nwkskey[sizeof(NWKSKEY)];
+    memcpy_P(appskey, APPSKEY, sizeof(APPSKEY));
+    memcpy_P(nwkskey, NWKSKEY, sizeof(NWKSKEY));
+    LMIC_setSession (0x1, DEVADDR, nwkskey, appskey);
+  #else
+    LMIC_setSession (0x1, DEVADDR, NWKSKEY, APPSKEY);
+  #endif
+  
+  LMIC_setupChannel(0, 868100000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);      // g-band
+  LMIC_setupChannel(1, 868300000, DR_RANGE_MAP(DR_SF12, DR_SF7B), BAND_CENTI);      // g-band
+  LMIC_setupChannel(2, 868500000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);      // g-band
+  LMIC_setupChannel(3, 867100000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);      // g-band
+  LMIC_setupChannel(4, 867300000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);      // g-band
+  LMIC_setupChannel(5, 867500000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);      // g-band
+  LMIC_setupChannel(6, 867700000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);      // g-band
+  LMIC_setupChannel(7, 867900000, DR_RANGE_MAP(DR_SF12, DR_SF7),  BAND_CENTI);      // g-band
+  LMIC_setupChannel(8, 868800000, DR_RANGE_MAP(DR_FSK,  DR_FSK),  BAND_MILLI);      // g2-band
+
+  // Disable link check validation
+  LMIC_setLinkCheckMode(0);
+
+  // TTN uses SF9 for its RX2 window.
+  LMIC.dn2Dr = DR_SF9;
+
+  // Set data rate and transmit power for uplink (note: txpow seems to be ignored by the library)
+  LMIC_setDrTxpow(DR_SF7,14); 
+
+  // Start sending packets
+  os_setCallback(&send_packet_job, send_packet);
 }
 
 
 // Send job
-static osjob_t send_packet_job;
 static void send_packet(osjob_t* j)
 {
   // Message payload
@@ -183,8 +198,6 @@ void onEvent (ev_t ev) {
             // Disable link check validation (automatically enabled
             // during join, but not supported by TTN at this time).
             LMIC_setLinkCheckMode(0);
-            // Start sending packets
-            os_setCallback(&send_packet_job, send_packet);
             break;
         case EV_RFU1:
             display.println("RFU1");
